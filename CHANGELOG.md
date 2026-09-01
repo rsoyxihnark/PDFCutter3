@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+- Typing an output folder no longer stalls the window while it re-reads the input PDF.
+- The Open button beside the output folder now updates as you type instead of a moment later.
+
 ## 1.0
 
 - PDF Cutter is now a ready-to-run Windows program, so there is nothing to install.

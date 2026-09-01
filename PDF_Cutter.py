@@ -26,7 +26,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.0"
+APP_VERSION = "1.0.1"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -529,7 +529,7 @@ class PDFCutterApp(tb.Frame):
     def _wire_events(self) -> None:
         self.operation_var.trace_add("write", lambda *_: self._update_mode_ui())
         self.input_path_var.trace_add("write", lambda *_: self._debounced_refresh_pdf_info())
-        self.output_dir_var.trace_add("write", lambda *_: self._debounced_refresh_pdf_info())
+        self.output_dir_var.trace_add("write", lambda *_: self._update_open_dir_button_state())
         self.range_spec_var.trace_add("write", lambda *_: self._update_range_icon())
         self.password_var.trace_add("write", lambda *_: self._debounced_refresh_pdf_info())
 

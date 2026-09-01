@@ -140,6 +140,9 @@ jobs:
           pip install --upgrade pyinstaller
           pip install -r requirements.txt
 
+      - name: Run the tests
+        run: python -m unittest discover -s tests -t . -v
+
       - name: Build PDF Cutter
         run: >
           pyinstaller --noconfirm --onefile --windowed
