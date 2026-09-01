@@ -37,7 +37,7 @@ Work out which of the three states below the repository is in, every session, be
 
 **The repository is empty, or holds source that has never been released.** Then bringing it to the state above is the task, before and beneath whatever else was asked. Put the version in one place in the source, write `CHANGELOG.md`, add the workflow that builds the project and publishes the built file from `main`, and ship the first version. What it publishes is one self-contained exe, unless the project is a game mod, which ships in the form the game loads instead. Add the files that download needs and nothing besides: a `.gitignore`, and a dependency manifest built from the imports the source actually has.
 
-The first release carries the version the source already has. Where the source has none, start at `1.0`. Never renumber a version the source already carries to fit a request about the changelog or a tag: say the two disagree, say which files each number is in, and ask which one wins.
+The first release carries the version the source already has. Where the source has none, start at `1.0.0`. Never renumber a version the source already carries to fit a request about the changelog or a tag: say the two disagree, say which files each number is in, and ask which one wins.
 
 **The project ships nothing a user downloads.** A library, a set of scripts, notes, configuration. Do not invent a release pipeline for one, and do not treat the absence of a workflow as the fault the first state describes. Say in chat that this is the state you found, keep the changelog and the version discipline, and leave the rest of this section alone. Turning it into something that publishes is the owner's call to make, never the session's.
 
@@ -73,6 +73,8 @@ The release workflow publishes the commit body as the release notes, so a commit
 
 ## Version
 
+- The version has three parts, `major.minor.patch`. Raise the first for a change that reworks the program or changes how it is used, the second for a new feature or a visible improvement, the third for a bug fix, a tweak or a small correction. Raising one part sets the parts after it back to zero.
+- Where the source still carries a number with fewer than three parts, the next version to ship is written with all three, and a number that has already been released keeps the form it went out with.
 - The version lives in one place in the source and nowhere else. Everything else reads it from there: the commit subject, the changelog heading, the git tag and the release all carry the same number, and the release workflow refuses to publish while any of them disagree.
 - That one place keeps the name it was given and is never renamed or moved, so a check can always find it. The gate reads the number out of the source itself rather than out of the commit subject, and tolerates the line endings the file is stored with.
 - Bump it in the same commit that ships the change, and never reuse a version that has already been released.
