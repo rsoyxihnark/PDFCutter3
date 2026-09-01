@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Check the version and the changelog
+        id: gate
+        shell: python
+        run: |
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          SOURCE = "PDF_Cutter.py"
+          CHANGELOG = "CHANGELOG.md"
+          OWN_MACHINERY_DIRS = (".github/", ".claude/", "tests/")
+          OWN_MACHINERY_FILES = ("CLAUDE.md", ".gitignore")
+
+
+          def git(*args):
+              return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
+
+
+          def read_text(path):
+              raw = Path(path).read_bytes().decode("utf-8")
+              return raw.replace("\r\n", "\n").replace("\r", "\n")
+
+
+          def fail(message):
+              print(f"::error::{message}")
+              sys.exit(1)
+
+
+          def set_output(name, value):
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+                  handle.write(f"{name}={value}\n")
+
+
+          def bullets(lines):
+              return [line.strip() for line in lines if line.strip().startswith("- ")]
+
+
+          def changelog_entries(text, heading):
+              collected = []
+              inside = False
+              for line in text.split("\n"):
+                  if line.startswith("##"):
+                      inside = re.fullmatch(rf"##\s+{re.escape(heading)}\s*", line) is not None
+                      continue
+                  if inside:
+                      collected.append(line)
+              return bullets(collected)
+
+
+          found = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', read_text(SOURCE), re.MULTILINE)
+          if not found:
+              fail(f"{SOURCE} has no APP_VERSION line to read the version from.")
+          version = found.group(1).strip()
+
+          subject = git("log", "-1", "--pretty=%s").strip()
+          body = git("log", "-1", "--pretty=%b").strip()
+
+          if git("log", "-1", "--pretty=%P").split():
+              changed = git("diff", "--name-only", "HEAD^", "HEAD")
+          else:
+              changed = git("show", "--pretty=", "--name-only", "HEAD")
+          changed = [line.strip() for line in changed.split("\n") if line.strip()]
+
+          labelled = re.match(r"\[([^\]]+)\]", subject)
+          if not labelled:
+              fail("The commit subject has to start with the version in square brackets, or with [no release].")
+          label = labelled.group(1).strip()
+
+          def is_own_machinery(path):
+              return path.startswith(OWN_MACHINERY_DIRS) or path in OWN_MACHINERY_FILES
+
+          set_output("version", version)
+
+          if label == "no release":
+              if CHANGELOG not in changed and not all(is_own_machinery(path) for path in changed):
+                  fail(f"This commit changes what a user gets, so it has to write its entries into {CHANGELOG}.")
+              set_output("release", "false")
+              print(f"Building {version} from a [no release] commit. Nothing will be published.")
+              sys.exit(0)
+
+          if label != version:
+              fail(f"The commit subject says {label} but {SOURCE} says {version}.")
+          if CHANGELOG not in changed:
+              fail(f"A commit that ships a version has to write its entries into {CHANGELOG}.")
+          if not body:
+              fail("A commit that ships a version needs a body, because the body is published as the release notes.")
+
+          changelog = read_text(CHANGELOG)
+          entries = changelog_entries(changelog, version)
+          if not re.search(rf"^##\s+{re.escape(version)}\s*$", changelog, re.MULTILINE):
+              fail(f"{CHANGELOG} has no section of its own for {version}.")
+          if re.search(r"^##\s+unreleased\s*$", changelog, re.MULTILINE | re.IGNORECASE):
+              fail("A commit that ships a version leaves no Unreleased heading behind it.")
+          if entries != bullets(body.split("\n")):
+              fail(f"The {version} section of {CHANGELOG} and the commit body have to say the same thing in the same words.")
+
+          tag = f"v{version}"
+          if git("ls-remote", "--tags", "origin", f"refs/tags/{tag}").strip():
+              fail(f"{tag} has already been published, so ship the fix under the next version instead.")
+
+          notes = Path(os.environ["RUNNER_TEMP"]) / "release_notes.md"
+          notes.write_text(body + "\n", encoding="utf-8")
+
+          set_output("release", "true")
+          set_output("tag", tag)
+          set_output("notes", str(notes))
+          print(f"Publishing {tag}.")
+
+      - name: Install the dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build PDF Cutter
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name PDF_Cutter
+          --collect-all ttkbootstrap
+          --collect-all tkinterdnd2
+          PDF_Cutter.py
+
+      - name: Check the download was produced
+        run: |
+          if (-not (Test-Path 'dist/PDF_Cutter.exe')) { throw 'The build produced no PDF_Cutter.exe.' }
+          Get-Item 'dist/PDF_Cutter.exe' | Format-List Name, Length
+
+      - name: Publish the release
+        if: steps.gate.outputs.release == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.gate.outputs.tag }}
+          name: ${{ steps.gate.outputs.tag }}
+          body_path: ${{ steps.gate.outputs.notes }}
+          files: dist/PDF_Cutter.exe
+          fail_on_unmatched_files: true
