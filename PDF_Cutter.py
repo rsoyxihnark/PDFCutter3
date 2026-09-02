@@ -26,7 +26,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.1.0"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -49,7 +49,6 @@ STATUS_WORKING = "Working…"
 STATUS_CANCELLING = "Cancelling…"
 STATUS_CANCELLED = "Cancelled"
 
-STATUS_INVALID_RANGE = "Invalid range"
 STATUS_OPENING_PDF = "Opening PDF…"
 STATUS_COLLECTING_PAGES = "Collecting {count} page(s)…"
 STATUS_WRITING_PARTS = "Writing {count} {unit}…"
@@ -513,7 +512,7 @@ class PDFCutterApp(tb.Frame):
         if self._job_running:
             return
         if result.valid is False:
-            self._set_status(STATUS_INVALID_RANGE, "error")
+            self._set_status(result.error, "error")
         elif self._loaded_page_count <= 0 and self.pdf_info_var.get() != MSG_NO_FILE_LOADED:
             self._set_status(self.pdf_info_var.get(), "error")
         elif result.valid is True:
@@ -824,31 +823,34 @@ class PDFCutterApp(tb.Frame):
                     part_pad = len(str(total_parts))
                     output_dir = Path(job["output_dir"])
                     created_files: list[str] = []
-                    cancelled = False
-                    for idx, start in enumerate(range(0, total_pages, chunk_size), start=1):
-                        if self._cancel_event.is_set():
-                            cancelled = True
-                            break
-                        end = min(start + chunk_size, total_pages)
-                        suffix = f"p{start + 1:0{page_pad}d}" if is_single else f"part{idx:0{part_pad}d}_p{start + 1}-{end}"
-                        out_path = make_unique_path(str(output_dir / f"{job['base_name']}_{suffix}.pdf"))
-                        base = (idx - 1) * part_span
-                        if not write_pdf_pages(
-                            reader,
-                            list(range(start, end)),
-                            out_path,
-                            expected_bytes=estimate_bytes(end - start),
-                            on_progress=lambda f, b=base: self._emit_progress(b + part_span * f),
-                            cancel_check=self._cancel_event.is_set,
-                        ):
-                            cancelled = True
-                            break
-                        created_files.append(out_path)
+                    finished = False
+                    try:
+                        for idx, start in enumerate(range(0, total_pages, chunk_size), start=1):
+                            if self._cancel_event.is_set():
+                                break
+                            end = min(start + chunk_size, total_pages)
+                            suffix = f"p{start + 1:0{page_pad}d}" if is_single else f"part{idx:0{part_pad}d}_p{start + 1}-{end}"
+                            out_path = make_unique_path(str(output_dir / f"{job['base_name']}_{suffix}.pdf"))
+                            base = (idx - 1) * part_span
+                            if not write_pdf_pages(
+                                reader,
+                                list(range(start, end)),
+                                out_path,
+                                expected_bytes=estimate_bytes(end - start),
+                                on_progress=lambda f, b=base: self._emit_progress(b + part_span * f),
+                                cancel_check=self._cancel_event.is_set,
+                            ):
+                                break
+                            created_files.append(out_path)
+                        else:
+                            finished = True
+                    finally:
+                        if not finished:
+                            for created in created_files:
+                                with suppress(OSError):
+                                    Path(created).unlink()
 
-                    if cancelled:
-                        for created in created_files:
-                            with suppress(OSError):
-                                Path(created).unlink()
+                    if not finished:
                         self._job_queue.put(("cancelled", None))
                         return
 

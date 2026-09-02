@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- The page range box now says exactly what is wrong with what you typed, instead of only that something is wrong.
+- A split that fails partway now clears away the files it had already made, so running it again gives you clean names.
+
 ## 1.0.1
 
 - Typing an output folder no longer stalls the window while it re-reads the input PDF.

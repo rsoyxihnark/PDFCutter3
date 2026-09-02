@@ -5,6 +5,7 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 from PDF_Cutter import (
+    EncryptedPDFError,
     make_unique_path,
     open_pdf_reader,
     parse_page_ranges,
@@ -86,6 +87,38 @@ class MakeUniquePath(unittest.TestCase):
         first.write_bytes(b"kept")
         self.assertFalse(Path(make_unique_path(str(target))).exists())
         self.assertEqual(target.read_bytes(), b"kept")
+
+
+class OpenPdfReader(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.source = self.dir / "source.pdf"
+        build_pdf(self.source, 3)
+
+    def encrypted(self, name, **passwords):
+        path = self.dir / name
+        writer = PdfWriter(clone_from=str(self.source))
+        writer.encrypt(**passwords)
+        with open(path, "wb") as f:
+            writer.write(f)
+        return str(path)
+
+    def test_reads_a_protected_pdf_given_the_right_password(self):
+        path = self.encrypted("locked.pdf", user_password="secret")
+        with open_pdf_reader(path, "secret") as reader:
+            self.assertEqual(len(reader.pages), 3)
+
+    def test_refuses_a_protected_pdf_without_the_right_password(self):
+        path = self.encrypted("locked.pdf", user_password="secret")
+        for password in ("", "wrong"):
+            with self.subTest(password=password), self.assertRaises(EncryptedPDFError):
+                with open_pdf_reader(path, password):
+                    pass
+
+    def test_reads_a_pdf_that_only_restricts_the_owner(self):
+        path = self.encrypted("owner_only.pdf", user_password="", owner_password="boss")
+        with open_pdf_reader(path, "") as reader:
+            self.assertEqual(len(reader.pages), 3)
 
 
 class WritePdfPages(unittest.TestCase):
