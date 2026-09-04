@@ -10,6 +10,7 @@ from PDF_Cutter import (
     open_pdf_reader,
     parse_page_ranges,
     sanitize_filename_component,
+    split_plan,
     write_pdf_pages,
 )
 
@@ -87,6 +88,33 @@ class MakeUniquePath(unittest.TestCase):
         first.write_bytes(b"kept")
         self.assertFalse(Path(make_unique_path(str(target))).exists())
         self.assertEqual(target.read_bytes(), b"kept")
+
+
+class SplitPlan(unittest.TestCase):
+    def test_single_page_names_are_padded_so_they_sort(self):
+        names = [name for _, _, name in split_plan(12, 1, "book")]
+        self.assertEqual(names[0], "book_p01.pdf")
+        self.assertEqual(names[-1], "book_p12.pdf")
+        self.assertEqual(names, sorted(names))
+
+    def test_part_names_are_padded_so_they_sort(self):
+        names = [name for _, _, name in split_plan(100, 10, "book")]
+        self.assertEqual(names[0], "book_part01_p1-10.pdf")
+        self.assertEqual(names[-1], "book_part10_p91-100.pdf")
+        self.assertEqual(names, sorted(names))
+
+    def test_every_page_lands_in_exactly_one_part(self):
+        for total, chunk in ((9, 3), (10, 3), (1, 1), (7, 10), (100, 1)):
+            with self.subTest(total=total, chunk=chunk):
+                plan = split_plan(total, chunk, "x")
+                covered = [page for start, end, _ in plan for page in range(start, end)]
+                self.assertEqual(covered, list(range(total)))
+
+    def test_names_never_repeat(self):
+        for total, chunk in ((100, 1), (100, 7), (11, 2), (5, 5)):
+            with self.subTest(total=total, chunk=chunk):
+                names = [name for _, _, name in split_plan(total, chunk, "x")]
+                self.assertEqual(len(set(names)), len(names))
 
 
 class OpenPdfReader(unittest.TestCase):

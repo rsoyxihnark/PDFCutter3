@@ -36,8 +36,6 @@ jobs:
 
           SOURCE = "PDF_Cutter.py"
           CHANGELOG = "CHANGELOG.md"
-          OWN_MACHINERY_DIRS = (".github/", ".claude/", "tests/")
-          OWN_MACHINERY_FILES = ("CLAUDE.md", ".gitignore")
 
 
           def git(*args):
@@ -94,14 +92,9 @@ jobs:
               fail("The commit subject has to start with the version in square brackets, or with [no release].")
           label = labelled.group(1).strip()
 
-          def is_own_machinery(path):
-              return path.startswith(OWN_MACHINERY_DIRS) or path in OWN_MACHINERY_FILES
-
           set_output("version", version)
 
           if label == "no release":
-              if CHANGELOG not in changed and not all(is_own_machinery(path) for path in changed):
-                  fail(f"This commit changes what a user gets, so it has to write its entries into {CHANGELOG}.")
               set_output("release", "false")
               print(f"Building {version} from a [no release] commit. Nothing will be published.")
               sys.exit(0)

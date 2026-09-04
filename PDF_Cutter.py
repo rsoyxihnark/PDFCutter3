@@ -148,6 +148,18 @@ def parse_page_ranges(spec: str, max_pages: int) -> list[int]:
     return sorted(pages)
 
 
+def split_plan(total_pages: int, chunk_size: int, base_name: str) -> list[tuple[int, int, str]]:
+    total_parts = -(-total_pages // chunk_size)
+    page_pad = len(str(total_pages))
+    part_pad = len(str(total_parts))
+    plan = []
+    for idx, start in enumerate(range(0, total_pages, chunk_size), start=1):
+        end = min(start + chunk_size, total_pages)
+        suffix = f"p{start + 1:0{page_pad}d}" if chunk_size == 1 else f"part{idx:0{part_pad}d}_p{start + 1}-{end}"
+        plan.append((start, end, f"{base_name}_{suffix}.pdf"))
+    return plan
+
+
 class JobCancelled(Exception):
     pass
 
@@ -521,9 +533,10 @@ class PDFCutterApp(tb.Frame):
             self._set_status(STATUS_READY, "info")
 
     def _open_output_folder_now(self) -> None:
-        if Path(self._output_dir).is_dir():
+        output_dir = self._output_dir
+        if output_dir and Path(output_dir).is_dir():
             with suppress(OSError):
-                os.startfile(self._output_dir)
+                os.startfile(output_dir)
 
     def _wire_events(self) -> None:
         self.operation_var.trace_add("write", lambda *_: self._update_mode_ui())
@@ -814,23 +827,19 @@ class PDFCutterApp(tb.Frame):
 
                 else:
                     chunk_size: int = job["chunk_size"]
-                    total_parts = -(-total_pages // chunk_size)
+                    plan = split_plan(total_pages, chunk_size, job["base_name"])
+                    total_parts = len(plan)
                     part_span = 100.0 / total_parts
-                    is_single = chunk_size == 1
-                    self._job_queue.put(("status", STATUS_WRITING_PARTS.format(count=total_parts, unit="page(s)" if is_single else "part(s)")))
+                    self._job_queue.put(("status", STATUS_WRITING_PARTS.format(count=total_parts, unit="page(s)" if chunk_size == 1 else "part(s)")))
 
-                    page_pad = len(str(total_pages))
-                    part_pad = len(str(total_parts))
                     output_dir = Path(job["output_dir"])
                     created_files: list[str] = []
                     finished = False
                     try:
-                        for idx, start in enumerate(range(0, total_pages, chunk_size), start=1):
+                        for idx, (start, end, name) in enumerate(plan, start=1):
                             if self._cancel_event.is_set():
                                 break
-                            end = min(start + chunk_size, total_pages)
-                            suffix = f"p{start + 1:0{page_pad}d}" if is_single else f"part{idx:0{part_pad}d}_p{start + 1}-{end}"
-                            out_path = make_unique_path(str(output_dir / f"{job['base_name']}_{suffix}.pdf"))
+                            out_path = make_unique_path(str(output_dir / name))
                             base = (idx - 1) * part_span
                             if not write_pdf_pages(
                                 reader,
