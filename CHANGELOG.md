@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+
+- The File version column in Windows Explorer now shows which version of PDF Cutter you have.
+- The Details tab of the PDF_Cutter.exe properties now carries the program name and description as well as the version.
+
 ## 1.1.0
 
 - The page range box now says exactly what is wrong with what you typed, instead of only that something is wrong.

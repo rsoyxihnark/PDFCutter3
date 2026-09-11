@@ -136,18 +136,74 @@ jobs:
       - name: Run the tests
         run: python -m unittest discover -s tests -t . -v
 
+      - name: Write the version details Windows reads off the exe
+        shell: python
+        env:
+          APP_VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          import os
+          from pathlib import Path
+
+          version = os.environ["APP_VERSION"]
+          parts = [int(part) for part in version.split(".")]
+          numbers = tuple((parts + [0, 0, 0, 0])[:4])
+
+          resource = f"""VSVersionInfo(
+            ffi=FixedFileInfo(
+              filevers={numbers},
+              prodvers={numbers},
+              mask=0x3f,
+              flags=0x0,
+              OS=0x40004,
+              fileType=0x1,
+              subtype=0x0,
+              date=(0, 0)
+            ),
+            kids=[
+              StringFileInfo([
+                StringTable(
+                  "040904B0",
+                  [StringStruct("FileDescription", "PDF Cutter"),
+                   StringStruct("FileVersion", "{version}"),
+                   StringStruct("InternalName", "PDF_Cutter"),
+                   StringStruct("OriginalFilename", "PDF_Cutter.exe"),
+                   StringStruct("ProductName", "PDF Cutter"),
+                   StringStruct("ProductVersion", "{version}")])
+              ]),
+              VarFileInfo([VarStruct("Translation", [1033, 1200])])
+            ]
+          )
+          """
+
+          written = Path(os.environ["RUNNER_TEMP"], "version_info.txt")
+          written.write_text(resource, encoding="utf-8")
+          print(f"PDF_Cutter.exe will report version {version}.")
+
       - name: Build PDF Cutter
         run: >
           pyinstaller --noconfirm --onefile --windowed
           --name PDF_Cutter
+          --version-file "${{ runner.temp }}/version_info.txt"
           --collect-all ttkbootstrap
           --collect-all tkinterdnd2
           PDF_Cutter.py
 
       - name: Check the download was produced
+        env:
+          APP_VERSION: ${{ steps.gate.outputs.version }}
         run: |
           if (-not (Test-Path 'dist/PDF_Cutter.exe')) { throw 'The build produced no PDF_Cutter.exe.' }
+          $details = (Get-Item 'dist/PDF_Cutter.exe').VersionInfo
+          $version = $env:APP_VERSION
+          $padded = (($version.Split('.') + @('0', '0', '0', '0'))[0..3]) -join '.'
+          if ($details.FileVersion -ne $version -and $details.FileVersion -ne $padded) {
+            throw "PDF_Cutter.exe reports its file version as '$($details.FileVersion)' instead of '$version'."
+          }
+          if ($details.ProductName -ne 'PDF Cutter') {
+            throw "PDF_Cutter.exe reports its product name as '$($details.ProductName)' instead of 'PDF Cutter'."
+          }
           Get-Item 'dist/PDF_Cutter.exe' | Format-List Name, Length
+          $details | Format-List FileDescription, FileVersion, ProductName, ProductVersion
 
       - name: Publish the release
         if: steps.gate.outputs.release == 'true'

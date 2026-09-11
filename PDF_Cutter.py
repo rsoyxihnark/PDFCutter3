@@ -26,7 +26,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
