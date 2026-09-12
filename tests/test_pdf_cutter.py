@@ -12,6 +12,7 @@ from PDF_Cutter import (
     sanitize_filename_component,
     split_plan,
     write_pdf_pages,
+    write_split_parts,
 )
 
 
@@ -194,6 +195,53 @@ class WritePdfPages(unittest.TestCase):
         out = str(self.dir / "extracted.pdf")
         with open_pdf_reader(str(self.source), "") as reader:
             write_pdf_pages(reader, list(range(9)), out, expected_bytes=self.source.stat().st_size, on_progress=seen.append)
+        self.assertEqual(seen[-1], 1.0)
+        self.assertTrue(all(b >= a for a, b in zip(seen, seen[1:])))
+
+
+class WriteSplitParts(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.source = self.dir / "source.pdf"
+        build_pdf(self.source, 6)
+        self.out = self.dir / "out"
+        self.out.mkdir()
+
+    def split(self, plan, **kwargs):
+        with open_pdf_reader(str(self.source), "") as reader:
+            return write_split_parts(reader, plan, str(self.out), lambda count: 1024, **kwargs)
+
+    def test_writes_every_part_of_the_plan(self):
+        plan = split_plan(6, 2, "book")
+        self.assertTrue(self.split(plan))
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), sorted(name for _, _, name in plan))
+        self.assertEqual(page_widths(str(self.out / plan[1][2])), [102, 103])
+
+    def test_cancelling_partway_clears_away_the_parts_it_had_written(self):
+        plan = split_plan(6, 2, "book")
+        self.assertFalse(self.split(plan, cancel_check=lambda: len(list(self.out.iterdir())) >= 2))
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_a_part_that_cannot_be_written_clears_away_the_earlier_ones(self):
+        plan = split_plan(6, 2, "book")
+        plan[2] = (*plan[2][:2], "gone/book_part3.pdf")
+        with self.assertRaises(OSError):
+            self.split(plan)
+        self.assertEqual(list(self.out.iterdir()), [])
+
+    def test_it_never_clears_away_a_file_it_did_not_write(self):
+        plan = split_plan(6, 2, "book")
+        kept = self.out / plan[0][2]
+        kept.write_bytes(b"kept")
+        plan[2] = (*plan[2][:2], "gone/book_part3.pdf")
+        with self.assertRaises(OSError):
+            self.split(plan)
+        self.assertEqual([p.name for p in self.out.iterdir()], [kept.name])
+        self.assertEqual(kept.read_bytes(), b"kept")
+
+    def test_progress_runs_from_zero_to_one_without_going_backwards(self):
+        seen = []
+        self.assertTrue(self.split(split_plan(6, 2, "book"), on_progress=seen.append))
         self.assertEqual(seen[-1], 1.0)
         self.assertTrue(all(b >= a for a, b in zip(seen, seen[1:])))
 

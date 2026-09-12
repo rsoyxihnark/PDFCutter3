@@ -229,6 +229,42 @@ def write_pdf_pages(
     return True
 
 
+def write_split_parts(
+    reader: PdfReader,
+    plan: list[tuple[int, int, str]],
+    output_dir: str,
+    expected_bytes: Callable[[int], int],
+    on_progress: Callable[[float], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> bool:
+    total_parts = len(plan)
+    created: list[str] = []
+    finished = False
+    try:
+        for idx, (start, end, name) in enumerate(plan, start=1):
+            if cancel_check and cancel_check():
+                break
+            out_path = make_unique_path(str(Path(output_dir) / name))
+            if not write_pdf_pages(
+                reader,
+                list(range(start, end)),
+                out_path,
+                expected_bytes=expected_bytes(end - start),
+                on_progress=(lambda f, done=idx - 1: on_progress((done + f) / total_parts)) if on_progress else None,
+                cancel_check=cancel_check,
+            ):
+                break
+            created.append(out_path)
+        else:
+            finished = True
+    finally:
+        if not finished:
+            for path in created:
+                with suppress(OSError):
+                    Path(path).unlink()
+    return finished
+
+
 class EncryptedPDFError(ValueError):
     pass
 
@@ -829,37 +865,16 @@ class PDFCutterApp(tb.Frame):
                     chunk_size: int = job["chunk_size"]
                     plan = split_plan(total_pages, chunk_size, job["base_name"])
                     total_parts = len(plan)
-                    part_span = 100.0 / total_parts
                     self._job_queue.put(("status", STATUS_WRITING_PARTS.format(count=total_parts, unit="page(s)" if chunk_size == 1 else "part(s)")))
 
-                    output_dir = Path(job["output_dir"])
-                    created_files: list[str] = []
-                    finished = False
-                    try:
-                        for idx, (start, end, name) in enumerate(plan, start=1):
-                            if self._cancel_event.is_set():
-                                break
-                            out_path = make_unique_path(str(output_dir / name))
-                            base = (idx - 1) * part_span
-                            if not write_pdf_pages(
-                                reader,
-                                list(range(start, end)),
-                                out_path,
-                                expected_bytes=estimate_bytes(end - start),
-                                on_progress=lambda f, b=base: self._emit_progress(b + part_span * f),
-                                cancel_check=self._cancel_event.is_set,
-                            ):
-                                break
-                            created_files.append(out_path)
-                        else:
-                            finished = True
-                    finally:
-                        if not finished:
-                            for created in created_files:
-                                with suppress(OSError):
-                                    Path(created).unlink()
-
-                    if not finished:
+                    if not write_split_parts(
+                        reader,
+                        plan,
+                        job["output_dir"],
+                        estimate_bytes,
+                        on_progress=lambda f: self._emit_progress(f * 100.0),
+                        cancel_check=self._cancel_event.is_set,
+                    ):
                         self._job_queue.put(("cancelled", None))
                         return
 
