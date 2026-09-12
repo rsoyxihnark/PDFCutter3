@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.0
+
+- The Pages per part (N) box now marks what you type with a tick or a cross and says what is wrong, so a mistake shows up before you press Start.
+- The status bar now turns green when a split is ready to run, the way it already did when extracting.
+
 ## 1.2.0
 
 - The File version column in Windows Explorer now shows which version of PDF Cutter you have.

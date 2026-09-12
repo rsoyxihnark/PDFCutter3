@@ -7,6 +7,7 @@ from pypdf import PdfReader, PdfWriter
 from PDF_Cutter import (
     EncryptedPDFError,
     make_unique_path,
+    parse_chunk_size,
     open_pdf_reader,
     parse_page_ranges,
     sanitize_filename_component,
@@ -54,6 +55,23 @@ class ParsePageRanges(unittest.TestCase):
         for spec in ("", "   ", "abc", "1-", "-3", "1-2-3"):
             with self.subTest(spec=spec), self.assertRaises(ValueError):
                 parse_page_ranges(spec, 10)
+
+
+class ParseChunkSize(unittest.TestCase):
+    def test_reads_a_plain_number(self):
+        self.assertEqual(parse_chunk_size("10"), 10)
+
+    def test_spaces_are_tolerated(self):
+        self.assertEqual(parse_chunk_size("  7 "), 7)
+
+    def test_rejects_zero(self):
+        with self.assertRaises(ValueError):
+            parse_chunk_size("0")
+
+    def test_rejects_empty_and_nonsense(self):
+        for spec in ("", "   ", "abc", "-1", "1.5", "1e3"):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                parse_chunk_size(spec)
 
 
 class SanitizeFilenameComponent(unittest.TestCase):

@@ -26,7 +26,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -146,6 +146,18 @@ def parse_page_ranges(spec: str, max_pages: int) -> list[int]:
     if not pages:
         raise ValueError("No pages selected.")
     return sorted(pages)
+
+
+def parse_chunk_size(spec: str) -> int:
+    spec = (spec or "").strip()
+    if not spec:
+        raise ValueError("Pages per part is empty.")
+    if not spec.isdecimal():
+        raise ValueError(f"Invalid number of pages '{spec}'.")
+    value = int(spec)
+    if value < 1:
+        raise ValueError("Pages per part starts at 1.")
+    return value
 
 
 def split_plan(total_pages: int, chunk_size: int, base_name: str) -> list[tuple[int, int, str]]:
@@ -453,18 +465,16 @@ class PDFCutterApp(tb.Frame):
         self.range_icon = tb.Label(options_frame, text="", font=("Segoe UI", 12), width=3)
         self.range_icon.grid(row=1, column=2, sticky="w", padx=(8, 0), pady=4)
 
-        self.chunk_entry = self._labeled_entry(
-            options_frame,
-            3,
-            "Pages per part (N):",
-            self.chunk_size_var,
-            label_padx=(18, 8),
-            label_pady=4,
-            entry_pady=4,
-            entry_sticky="w",
-            font=("Consolas", 11),
-            width=10,
-        )
+        tb.Label(options_frame, text="Pages per part (N):").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=4)
+
+        chunk_wrap = tb.Frame(options_frame)
+        chunk_wrap.grid(row=3, column=1, sticky="w", pady=4)
+
+        self.chunk_entry = tb.Entry(chunk_wrap, textvariable=self.chunk_size_var, font=("Consolas", 11), width=10)
+        self.chunk_entry.pack(side="left")
+
+        self.chunk_icon = tb.Label(chunk_wrap, text="", font=("Segoe UI", 12), width=3)
+        self.chunk_icon.pack(side="left", padx=(8, 0))
 
         name_frame = tb.Labelframe(main_frame, text="Output naming", padding=10)
         name_frame.grid(row=5, column=0, sticky="ew", pady=(10, 0))
@@ -543,22 +553,39 @@ class PDFCutterApp(tb.Frame):
         except ValueError as e:
             return RangeParseResult(False, False, None, str(e))
 
+    def _parse_chunk(self) -> RangeParseResult:
+        if self.operation_var.get() != OP_SPLIT or self._loaded_page_count <= 0:
+            return RangeParseResult(None, False, None)
+
+        text = self.chunk_size_var.get().strip()
+        if not text:
+            return RangeParseResult(None, True, None)
+
+        try:
+            parse_chunk_size(text)
+            return RangeParseResult(True, False, None)
+        except ValueError as e:
+            return RangeParseResult(False, False, None, str(e))
+
     def _update_open_dir_button_state(self) -> None:
         output_dir = self._output_dir
         state = "normal" if output_dir and Path(output_dir).is_dir() else "disabled"
         self._safe_configure(self.output_open_button, state=state)
 
     def _update_range_icon(self) -> None:
-        result = self._parse_ranges()
+        ranges = self._parse_ranges()
+        chunk = self._parse_chunk()
         styles = {
             None: ("", COLOR_DEFAULT_FG),
             True: (ICON_VALID, COLOR_SUCCESS),
             False: (ICON_INVALID, COLOR_ERROR),
         }
-        icon, color = styles[result.valid]
-        self._safe_configure(self.range_icon, text=icon, foreground=color)
+        for widget, state in ((self.range_icon, ranges.valid), (self.chunk_icon, chunk.valid)):
+            icon, color = styles[state]
+            self._safe_configure(widget, text=icon, foreground=color)
         if self._job_running:
             return
+        result = chunk if self.operation_var.get() == OP_SPLIT else ranges
         if result.valid is False:
             self._set_status(result.error, "error")
         elif self._loaded_page_count <= 0 and self.pdf_info_var.get() != MSG_NO_FILE_LOADED:
@@ -579,6 +606,7 @@ class PDFCutterApp(tb.Frame):
         self.input_path_var.trace_add("write", lambda *_: self._debounced_refresh_pdf_info())
         self.output_dir_var.trace_add("write", lambda *_: self._update_open_dir_button_state())
         self.range_spec_var.trace_add("write", lambda *_: self._update_range_icon())
+        self.chunk_size_var.trace_add("write", lambda *_: self._update_range_icon())
         self.password_var.trace_add("write", lambda *_: self._debounced_refresh_pdf_info())
 
     def _setup_dnd(self) -> None:
@@ -724,10 +752,7 @@ class PDFCutterApp(tb.Frame):
                 raise ValueError(result.error or "Invalid page range.")
             page_indices = result.indices
         else:
-            chunk_size_raw = self.chunk_size_var.get().strip()
-            if not chunk_size_raw.isdecimal() or int(chunk_size_raw) == 0:
-                raise ValueError("Pages per part (N) must be a positive integer.")
-            chunk_size = int(chunk_size_raw)
+            chunk_size = parse_chunk_size(self.chunk_size_var.get())
 
         return {
             "input_path": input_path,
