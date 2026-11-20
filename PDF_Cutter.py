@@ -19,6 +19,7 @@ except ImportError:
     HAS_DND = False
 
 
+# Valuable-Run-Lesson: a PDF with about 100,000 links froze the program while pypdf resolved them, which is why link resolution is skipped here.
 if hasattr(PdfWriter, "_resolve_links"):
     def _skip_link_resolution(self) -> None:
         with suppress(AttributeError):
