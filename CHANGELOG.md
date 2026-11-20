@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.2
+
+- Fixed a page with links to other pages, such as a table of contents, bringing those pages into the new file and making it far too big.
+- Fixed PDFs with a great many links between pages failing to extract or split.
+- Fixed links between pages saved into the same new file not taking you to the right page.
+- Links to pages that are left out of the new file are now removed instead of leading nowhere.
+
 ## 1.3.1
 
 - Fixed a password left in the Password (optional) box from another PDF stopping a PDF that needs no password from opening.

@@ -10,7 +10,8 @@ from contextlib import contextmanager, suppress
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import ttkbootstrap as tb
-from pypdf import PdfReader, PdfWriter, PasswordType
+from pypdf import PageObject, PdfReader, PdfWriter, PasswordType
+from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -27,7 +28,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -62,6 +63,7 @@ MSG_ENCRYPTED_WRONG_PASSWORD = "Encrypted PDF: wrong or missing password."
 REFRESH_DEBOUNCE_MS = 400
 COLLECT_FRACTION = 0.4
 PROGRESS_STEP = 0.5
+SKIPPED_ANNOTATION_KEYS = ("/Parent", "/StructParents")
 
 
 class JobDict(TypedDict):
@@ -202,6 +204,32 @@ class _ProgressStream:
         return getattr(self._fh, name)
 
 
+def copy_annotation(writer: PdfWriter, annot: Any, copies: dict[int, PageObject]) -> DictionaryObject | None:
+    if not isinstance(annot, DictionaryObject):
+        return None
+    action = annot.get("/A")
+    if "/Dest" in annot:
+        key, dest = "/Dest", annot["/Dest"]
+    elif isinstance(action, DictionaryObject) and action.get("/S") == "/GoTo":
+        key, dest = "/A", action.get("/D")
+    else:
+        return annot.clone(writer, ignore_fields=SKIPPED_ANNOTATION_KEYS)
+    if not isinstance(dest, ArrayObject) or not dest or not isinstance(dest[0], IndirectObject):
+        return annot.clone(writer, ignore_fields=SKIPPED_ANNOTATION_KEYS)
+    target = copies.get(dest[0].idnum)
+    if target is None:
+        return None
+    moved = ArrayObject([target.indirect_reference, *dest[1:]])
+    copy = annot.clone(writer, ignore_fields=(*SKIPPED_ANNOTATION_KEYS, 1, key))
+    if key == "/Dest":
+        copy[NameObject("/Dest")] = moved
+    else:
+        new_action = action.clone(writer, ignore_fields=(*SKIPPED_ANNOTATION_KEYS, 1, "/D"))
+        new_action[NameObject("/D")] = moved
+        copy[NameObject("/A")] = writer._add_object(new_action)
+    return copy
+
+
 def write_pdf_pages(
     reader: PdfReader,
     page_indices: list[int],
@@ -213,12 +241,29 @@ def write_pdf_pages(
 ) -> bool:
     writer = PdfWriter()
     total = len(page_indices)
+    copies: dict[int, PageObject] = {}
     for i, page_index in enumerate(page_indices, start=1):
         if cancel_check and cancel_check():
             return False
-        writer.add_page(reader.pages[page_index])
+        source = reader.pages[page_index]
+        copies[source.indirect_reference.idnum] = writer.add_page(source, excluded_keys=[1, "/Annots"])
         if on_progress:
-            on_progress(i / total * COLLECT_FRACTION)
+            on_progress(i / total * COLLECT_FRACTION / 2)
+
+    for i, page_index in enumerate(page_indices, start=1):
+        if cancel_check and cancel_check():
+            return False
+        source = reader.pages[page_index]
+        found = source.get("/Annots")
+        annots = ArrayObject()
+        for annot in found if isinstance(found, ArrayObject) else ():
+            copy = copy_annotation(writer, annot.get_object(), copies)
+            if copy is not None:
+                annots.append(writer._add_object(copy))
+        if annots:
+            copies[source.indirect_reference.idnum][NameObject("/Annots")] = annots
+        if on_progress:
+            on_progress((0.5 + i / total / 2) * COLLECT_FRACTION)
 
     if on_write_start:
         on_write_start()

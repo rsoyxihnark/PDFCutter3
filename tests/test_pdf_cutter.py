@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject, NameObject, TextStringObject
 
 from PDF_Cutter import (
     EncryptedPDFError,
@@ -21,6 +22,35 @@ def build_pdf(path: Path, pages: int) -> None:
     writer = PdfWriter()
     for i in range(pages):
         writer.add_blank_page(100 + i, 200)
+    with open(path, "wb") as f:
+        writer.write(f)
+
+
+def build_linked_pdf(path: Path) -> None:
+    writer = PdfWriter()
+    for i in range(3):
+        page = writer.add_blank_page(100 + i, 200)
+        content = DecodedStreamObject()
+        content.set_data(f"BT (marker{i}) Tj ET".encode())
+        page[NameObject("/Contents")] = writer._add_object(content)
+
+    def link(key, value):
+        return writer._add_object(DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Link"),
+            NameObject("/Rect"): ArrayObject([FloatObject(0)] * 4),
+            NameObject(key): value,
+        }))
+
+    def action(kind, key, value):
+        return DictionaryObject({NameObject("/S"): NameObject(kind), NameObject(key): value})
+
+    pages = writer.pages
+    writer.pages[0][NameObject("/Annots")] = ArrayObject([
+        link("/Dest", ArrayObject([pages[1].indirect_reference, NameObject("/Fit")])),
+        link("/A", action("/GoTo", "/D", ArrayObject([pages[2].indirect_reference, NameObject("/Fit")]))),
+        link("/A", action("/URI", "/URI", TextStringObject("https://example.com"))),
+    ])
     with open(path, "wb") as f:
         writer.write(f)
 
@@ -199,17 +229,19 @@ class WritePdfPages(unittest.TestCase):
         self.assertEqual(list(self.dir.glob("*.part")), [])
 
     def test_cancelling_while_writing_writes_nothing(self):
-        calls = []
-
-        def cancel_after_collecting():
-            calls.append(None)
-            return len(calls) > 9
-
+        writing = []
         out = self.dir / "extracted.pdf"
         with open_pdf_reader(str(self.source), "") as reader:
             self.assertFalse(
-                write_pdf_pages(reader, list(range(9)), str(out), cancel_check=cancel_after_collecting)
+                write_pdf_pages(
+                    reader,
+                    list(range(9)),
+                    str(out),
+                    on_write_start=lambda: writing.append(True),
+                    cancel_check=lambda: bool(writing),
+                )
             )
+        self.assertTrue(writing)
         self.assertFalse(out.exists())
         self.assertEqual(list(self.dir.glob("*.part")), [])
 
@@ -220,6 +252,27 @@ class WritePdfPages(unittest.TestCase):
             write_pdf_pages(reader, list(range(9)), out, expected_bytes=self.source.stat().st_size, on_progress=seen.append)
         self.assertEqual(seen[-1], 1.0)
         self.assertTrue(all(b >= a for a, b in zip(seen, seen[1:])))
+
+
+    def test_a_link_to_a_page_left_out_does_not_bring_that_page_along(self):
+        source = self.dir / "linked.pdf"
+        build_linked_pdf(source)
+        out = self.dir / "extracted.pdf"
+        with open_pdf_reader(str(source), "") as reader:
+            self.assertTrue(write_pdf_pages(reader, [0, 2], str(out)))
+        self.assertNotIn(b"marker1", out.read_bytes())
+
+    def test_links_to_extracted_pages_and_web_links_keep_working(self):
+        source = self.dir / "linked.pdf"
+        build_linked_pdf(source)
+        out = self.dir / "extracted.pdf"
+        with open_pdf_reader(str(source), "") as reader:
+            self.assertTrue(write_pdf_pages(reader, [0, 2], str(out)))
+        pages = PdfReader(str(out)).pages
+        actions = [annot.get_object()["/A"] for annot in pages[0]["/Annots"]]
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(actions[0]["/D"][0].idnum, pages[1].indirect_reference.idnum)
+        self.assertEqual(actions[1]["/URI"], "https://example.com")
 
 
 class WriteSplitParts(unittest.TestCase):
