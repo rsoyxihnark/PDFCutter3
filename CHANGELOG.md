@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+- Fixed a password left in the Password (optional) box from another PDF stopping a PDF that needs no password from opening.
+
 ## 1.3.0
 
 - The Pages per part (N) box now marks what you type with a tick or a cross and says what is wrong, so a mistake shows up before you press Start.

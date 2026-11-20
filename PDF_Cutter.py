@@ -26,7 +26,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -293,7 +293,7 @@ class RangeParseResult:
 def open_pdf_reader(path: str, password: str) -> Generator[PdfReader, None, None]:
     with open(path, "rb") as f:
         reader = PdfReader(f)
-        if reader.is_encrypted and reader.decrypt(password or "") == PasswordType.NOT_DECRYPTED:
+        if reader.is_encrypted and all(reader.decrypt(attempt) == PasswordType.NOT_DECRYPTED for attempt in (password, "")):
             raise EncryptedPDFError()
         yield reader
 

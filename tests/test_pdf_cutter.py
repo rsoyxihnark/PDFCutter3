@@ -167,6 +167,11 @@ class OpenPdfReader(unittest.TestCase):
         with open_pdf_reader(path, "") as reader:
             self.assertEqual(len(reader.pages), 3)
 
+    def test_a_password_left_from_another_pdf_does_not_block_one_that_needs_none(self):
+        path = self.encrypted("owner_only.pdf", user_password="", owner_password="boss")
+        with open_pdf_reader(path, "secret") as reader:
+            self.assertEqual(len(reader.pages), 3)
+
 
 class WritePdfPages(unittest.TestCase):
     def setUp(self):
