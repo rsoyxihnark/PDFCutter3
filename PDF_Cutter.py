@@ -28,7 +28,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -207,11 +207,11 @@ class _ProgressStream:
 def copy_annotation(writer: PdfWriter, annot: Any, copies: dict[int, PageObject]) -> DictionaryObject | None:
     if not isinstance(annot, DictionaryObject):
         return None
-    action = annot.get("/A")
+    action = annot["/A"] if "/A" in annot else None
     if "/Dest" in annot:
         key, dest = "/Dest", annot["/Dest"]
-    elif isinstance(action, DictionaryObject) and action.get("/S") == "/GoTo":
-        key, dest = "/A", action.get("/D")
+    elif isinstance(action, DictionaryObject) and action.get("/S") == "/GoTo" and "/D" in action:
+        key, dest = "/A", action["/D"]
     else:
         return annot.clone(writer, ignore_fields=SKIPPED_ANNOTATION_KEYS)
     if not isinstance(dest, ArrayObject) or not dest or not isinstance(dest[0], IndirectObject):
@@ -254,9 +254,8 @@ def write_pdf_pages(
         if cancel_check and cancel_check():
             return False
         source = reader.pages[page_index]
-        found = source.get("/Annots")
         annots = ArrayObject()
-        for annot in found if isinstance(found, ArrayObject) else ():
+        for annot in source.annotations or ():
             copy = copy_annotation(writer, annot.get_object(), copies)
             if copy is not None:
                 annots.append(writer._add_object(copy))

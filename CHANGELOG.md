@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.3
+
+- Fixed links, highlights and comments being left out of the new file for some PDFs.
+- Fixed a page with links to other pages still bringing those pages into the new file in some PDFs.
+
 ## 1.3.2
 
 - Fixed a page with links to other pages, such as a table of contents, bringing those pages into the new file and making it far too big.
