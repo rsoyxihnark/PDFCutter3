@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import ttkbootstrap as tb
 from pypdf import PageObject, PdfReader, PdfWriter, PasswordType
-from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject
+from pypdf.generic import ArrayObject, Destination, DictionaryObject, IndirectObject, NameObject
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -28,7 +28,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -204,7 +204,9 @@ class _ProgressStream:
         return getattr(self._fh, name)
 
 
-def copy_annotation(writer: PdfWriter, annot: Any, copies: dict[int, PageObject]) -> DictionaryObject | None:
+def copy_annotation(
+    writer: PdfWriter, annot: Any, copies: dict[int, PageObject], named_destinations: dict[str, Destination]
+) -> DictionaryObject | None:
     if not isinstance(annot, DictionaryObject):
         return None
     action = annot["/A"] if "/A" in annot else None
@@ -214,6 +216,8 @@ def copy_annotation(writer: PdfWriter, annot: Any, copies: dict[int, PageObject]
         key, dest = "/A", action["/D"]
     else:
         return annot.clone(writer, ignore_fields=SKIPPED_ANNOTATION_KEYS)
+    if isinstance(dest, (str, bytes)) and str(dest) in named_destinations:
+        dest = named_destinations[str(dest)].dest_array
     if not isinstance(dest, ArrayObject) or not dest or not isinstance(dest[0], IndirectObject):
         return annot.clone(writer, ignore_fields=SKIPPED_ANNOTATION_KEYS)
     target = copies.get(dest[0].idnum)
@@ -238,7 +242,10 @@ def write_pdf_pages(
     on_progress: Callable[[float], None] | None = None,
     on_write_start: Callable[[], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    named_destinations: dict[str, Destination] | None = None,
 ) -> bool:
+    if named_destinations is None:
+        named_destinations = reader.named_destinations
     writer = PdfWriter()
     total = len(page_indices)
     copies: dict[int, PageObject] = {}
@@ -256,7 +263,7 @@ def write_pdf_pages(
         source = reader.pages[page_index]
         annots = ArrayObject()
         for annot in source.annotations or ():
-            copy = copy_annotation(writer, annot.get_object(), copies)
+            copy = copy_annotation(writer, annot.get_object(), copies, named_destinations)
             if copy is not None:
                 annots.append(writer._add_object(copy))
         if annots:
@@ -295,6 +302,7 @@ def write_split_parts(
     cancel_check: Callable[[], bool] | None = None,
 ) -> bool:
     total_parts = len(plan)
+    named_destinations = reader.named_destinations
     created: list[str] = []
     finished = False
     try:
@@ -309,6 +317,7 @@ def write_split_parts(
                 expected_bytes=expected_bytes(end - start),
                 on_progress=(lambda f, done=idx - 1: on_progress((done + f) / total_parts)) if on_progress else None,
                 cancel_check=cancel_check,
+                named_destinations=named_destinations,
             ):
                 break
             created.append(out_path)

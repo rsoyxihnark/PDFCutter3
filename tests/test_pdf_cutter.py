@@ -26,7 +26,7 @@ def build_pdf(path: Path, pages: int) -> None:
         writer.write(f)
 
 
-def build_linked_pdf(path: Path, indirect: bool = False) -> None:
+def build_linked_pdf(path: Path, indirect: bool = False, named: bool = False) -> None:
     writer = PdfWriter()
     for i in range(3):
         page = writer.add_blank_page(100 + i, 200)
@@ -47,10 +47,19 @@ def build_linked_pdf(path: Path, indirect: bool = False) -> None:
         return writer._add_object(made) if indirect else made
 
     pages = writer.pages
+    if named:
+        for index in (1, 2):
+            writer.add_named_destination(f"page{index}", index)
+
+    def target(index):
+        if named:
+            return TextStringObject(f"page{index}")
+        return ArrayObject([pages[index].indirect_reference, NameObject("/Fit")])
+
     annots = ArrayObject([
-        link("/Dest", ArrayObject([pages[1].indirect_reference, NameObject("/Fit")])),
-        link("/A", action("/GoTo", "/D", ArrayObject([pages[1].indirect_reference, NameObject("/Fit")]))),
-        link("/A", action("/GoTo", "/D", ArrayObject([pages[2].indirect_reference, NameObject("/Fit")]))),
+        link("/Dest", target(1)),
+        link("/A", action("/GoTo", "/D", target(1))),
+        link("/A", action("/GoTo", "/D", target(2))),
         link("/A", action("/URI", "/URI", TextStringObject("https://example.com"))),
     ])
     pages[0][NameObject("/Annots")] = writer._add_object(annots) if indirect else annots
@@ -257,23 +266,25 @@ class WritePdfPages(unittest.TestCase):
         self.assertTrue(all(b >= a for a, b in zip(seen, seen[1:])))
 
 
-    def extract_linked(self, indirect):
-        source = self.dir / f"linked_{indirect}.pdf"
-        build_linked_pdf(source, indirect)
-        out = self.dir / f"extracted_{indirect}.pdf"
+    LINK_STYLES = ((False, False), (True, False), (False, True))
+
+    def extract_linked(self, indirect, named):
+        source = self.dir / f"linked_{indirect}_{named}.pdf"
+        build_linked_pdf(source, indirect, named)
+        out = self.dir / f"extracted_{indirect}_{named}.pdf"
         with open_pdf_reader(str(source), "") as reader:
             self.assertTrue(write_pdf_pages(reader, [0, 2], str(out)))
         return out
 
     def test_a_link_to_a_page_left_out_does_not_bring_that_page_along(self):
-        for indirect in (False, True):
-            with self.subTest(indirect=indirect):
-                self.assertNotIn(b"marker1", self.extract_linked(indirect).read_bytes())
+        for indirect, named in self.LINK_STYLES:
+            with self.subTest(indirect=indirect, named=named):
+                self.assertNotIn(b"marker1", self.extract_linked(indirect, named).read_bytes())
 
     def test_links_to_extracted_pages_and_web_links_keep_working(self):
-        for indirect in (False, True):
-            with self.subTest(indirect=indirect):
-                pages = PdfReader(str(self.extract_linked(indirect))).pages
+        for indirect, named in self.LINK_STYLES:
+            with self.subTest(indirect=indirect, named=named):
+                pages = PdfReader(str(self.extract_linked(indirect, named))).pages
                 actions = [annot.get_object()["/A"] for annot in pages[0]["/Annots"]]
                 self.assertEqual(len(actions), 2)
                 self.assertEqual(actions[0]["/D"][0].idnum, pages[1].indirect_reference.idnum)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.4
+
+- Fixed links in some PDFs, such as ones saved from a web browser, leading nowhere in the new file.
+
 ## 1.3.3
 
 - Fixed links, highlights and comments being left out of the new file for some PDFs.
