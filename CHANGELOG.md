@@ -7,6 +7,7 @@
 - The window now fades in gently when PDF Cutter starts.
 - The loaded PDF and its page count now sit in a bar in the Files box, with a green dot when it is ready and a red one when it cannot be read.
 - Dragging a PDF over the window now turns the bar in the Files box blue and says Release to load this PDF.
+- The Drop a PDF anywhere in this window to load it hint now sits at the right end of the bar in the Files box.
 - Extract pages/ranges into one PDF and Split into parts of N pages are now two tabs side by side, showing only the box the chosen one needs.
 - The Operation box now shows what a job will save, such as 45 pages → 5 files, report_part1_p1-10.pdf to report_part5_p41-45.pdf.
 - The tip to use 1 for single-page PDFs now sits beside the Pages per part (N) box.
