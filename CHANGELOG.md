@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.0
+
+- PDF Cutter now has its own icon on the window, in the taskbar and on PDF_Cutter.exe in Windows Explorer.
+- The title bar is now dark to match the rest of the window.
+- The window now fades in gently when PDF Cutter starts.
+- The loaded PDF and its page count now sit in a bar in the Files box, with a green dot when it is ready and a red one when it cannot be read.
+- Dragging a PDF over the window now turns the bar in the Files box blue and says Release to load this PDF.
+- Extract pages/ranges into one PDF and Split into parts of N pages are now two tabs side by side, showing only the box the chosen one needs.
+- The Operation box now shows what a job will save, such as 45 pages → 5 files, report_part1_p1-10.pdf to report_part5_p41-45.pdf.
+- The tip to use 1 for single-page PDFs now sits beside the Pages per part (N) box.
+- The status bar now shows how far a job has got as a percentage beside the progress bar.
+- The version you are running now also shows in the top right corner of the window.
+- Choosing a file or folder with Browse..., or dropping a PDF, now shows the end of the path, so the name is never hidden.
+- Buttons, tabs and the Open output folder when done box now show a hand pointer when you point at them.
+- The Extract · Split · Save line under the title is now easier to read.
+- The Files and Operation boxes now sit closer together, without the line between them.
+
 ## 1.3.4
 
 - Fixed links in some PDFs, such as ones saved from a web browser, leading nowhere in the new file.

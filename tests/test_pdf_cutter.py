@@ -1,5 +1,7 @@
+import struct
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from pypdf import PdfReader, PdfWriter
@@ -7,10 +9,13 @@ from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, Fl
 
 from PDF_Cutter import (
     EncryptedPDFError,
+    extracted_file_name,
     make_unique_path,
+    output_preview,
     parse_chunk_size,
     open_pdf_reader,
     parse_page_ranges,
+    render_app_icon_png,
     sanitize_filename_component,
     split_plan,
     write_pdf_pages,
@@ -336,6 +341,51 @@ class WriteSplitParts(unittest.TestCase):
         self.assertTrue(self.split(split_plan(6, 2, "book"), on_progress=seen.append))
         self.assertEqual(seen[-1], 1.0)
         self.assertTrue(all(b >= a for a, b in zip(seen, seen[1:])))
+
+
+class OutputPreview(unittest.TestCase):
+    def test_one_file_names_it(self):
+        name = extracted_file_name("book")
+        self.assertEqual(output_preview(5, 1, name, name), "5 pages  →  book_extracted.pdf")
+
+    def test_a_single_page_is_not_called_pages(self):
+        self.assertEqual(output_preview(1, 1, "a.pdf", "a.pdf"), "1 page  →  a.pdf")
+
+    def test_many_files_name_the_first_and_the_last(self):
+        plan = split_plan(45, 10, "book")
+        self.assertEqual(
+            output_preview(45, len(plan), plan[0][2], plan[-1][2]),
+            "45 pages  →  5 files, book_part1_p1-10.pdf to book_part5_p41-45.pdf",
+        )
+
+
+class RenderAppIcon(unittest.TestCase):
+    def decode(self, data):
+        self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+        chunks, offset = {}, 8
+        while offset < len(data):
+            length, kind = struct.unpack(">I4s", data[offset:offset + 8])
+            body = data[offset + 8:offset + 8 + length]
+            self.assertEqual(struct.unpack(">I", data[offset + 8 + length:offset + 12 + length])[0], zlib.crc32(kind + body))
+            chunks[kind] = chunks.get(kind, b"") + body
+            offset += 12 + length
+        width, height, depth, color_type = struct.unpack(">IIBB", chunks[b"IHDR"][:10])
+        raw = zlib.decompress(chunks[b"IDAT"])
+        rows = [raw[y * (width * 4 + 1):(y + 1) * (width * 4 + 1)] for y in range(height)]
+        return width, height, depth, color_type, rows
+
+    def test_every_size_is_a_square_rgba_png(self):
+        for size in (16, 32, 48, 256):
+            with self.subTest(size=size):
+                width, height, depth, color_type, rows = self.decode(render_app_icon_png(size))
+                self.assertEqual((width, height, depth, color_type), (size, size, 8, 6))
+                self.assertTrue(all(row[0] == 0 and len(row) == size * 4 + 1 for row in rows))
+
+    def test_corners_are_clear_and_the_middle_is_solid(self):
+        _, _, _, _, rows = self.decode(render_app_icon_png(32))
+        alpha = lambda x, y: rows[y][1 + x * 4 + 3]
+        self.assertEqual([alpha(0, 0), alpha(31, 0), alpha(0, 31), alpha(31, 31)], [0, 0, 0, 0])
+        self.assertEqual(alpha(16, 8), 255)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 import os
 import queue
+import base64
+import struct
 import threading
+import zlib
 import ctypes
 from pathlib import Path
 from dataclasses import dataclass
@@ -28,7 +31,7 @@ if hasattr(PdfWriter, "_resolve_links"):
 
     PdfWriter._resolve_links = _skip_link_resolution
 
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.4.0"
 
 USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE = r"D:\Clementine\Desktop\TEST"
 
@@ -38,6 +41,22 @@ COLOR_DEFAULT_FG = "grey"
 ICON_VALID = "✅"
 ICON_INVALID = "❌"
 MONITOR_DEFAULTTONEAREST = 2
+
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_CAPTION_COLOR = 35
+TITLE_BAR_COLORREF = 0x00222222
+FADE_IN_STEPS = 10
+FADE_IN_STEP_MS = 15
+
+APP_ICON_SIZES = (48, 32, 16)
+APP_ICON_SUPERSAMPLE = 4
+APP_ICON_GRADIENT = ((0x00, 0xBC, 0x8C), (0x34, 0x98, 0xDB))
+APP_ICON_PAGE = (0xF8, 0xF9, 0xFA)
+APP_ICON_FOLD = (0xBE, 0xC8, 0xD0)
+APP_ICON_TEXT = (0x96, 0xA0, 0xAA)
+APP_ICON_CUT = (0xFF, 0xFF, 0xFF)
+APP_ICON_CUT_Y = 0.53
+APP_ICON_TEXT_LINES = ((0.25, 0.50), (0.35, 0.62), (0.43, 0.62), (0.63, 0.62), (0.71, 0.62), (0.79, 0.52))
 
 POLL_INTERVAL_MS = 80
 PROGRESS_BAR_LENGTH = 160
@@ -59,6 +78,8 @@ STATUS_WRITING_OUTPUT = "Writing output file…"
 MSG_NO_FILE_LOADED = "No file loaded"
 MSG_ENCRYPTED_NEED_PASSWORD = "Encrypted PDF (enter password to read)"
 MSG_ENCRYPTED_WRONG_PASSWORD = "Encrypted PDF: wrong or missing password."
+MSG_DROP_TO_LOAD = "Release to load this PDF"
+MSG_DROP_HINT = "Drop a PDF anywhere in this window to load it"
 
 REFRESH_DEBOUNCE_MS = 400
 COLLECT_FRACTION = 0.4
@@ -173,6 +194,86 @@ def split_plan(total_pages: int, chunk_size: int, base_name: str) -> list[tuple[
         suffix = f"p{start + 1:0{page_pad}d}" if chunk_size == 1 else f"part{idx:0{part_pad}d}_p{start + 1}-{end}"
         plan.append((start, end, f"{base_name}_{suffix}.pdf"))
     return plan
+
+
+def extracted_file_name(base_name: str) -> str:
+    return f"{base_name}_extracted.pdf"
+
+
+def output_preview(page_count: int, file_count: int, first_name: str, last_name: str) -> str:
+    pages = f"{page_count} page{'s' if page_count != 1 else ''}"
+    if file_count == 1:
+        return f"{pages}  →  {first_name}"
+    return f"{pages}  →  {file_count} files, {first_name} to {last_name}"
+
+
+def _rounded_span(y: float, top: float, bottom: float, left: float, right: float, radius: float) -> tuple[float, float] | None:
+    if not top <= y <= bottom:
+        return None
+    inset = max(top + radius - y, y - bottom + radius, 0.0)
+    shrink = radius - (radius * radius - inset * inset) ** 0.5
+    return left + shrink, right - shrink
+
+
+def _app_icon_row(y: float) -> list[tuple[float, float, tuple[int, int, int] | None]]:
+    tile = _rounded_span(y, 0.04, 0.96, 0.04, 0.96, 0.22)
+    if tile is None:
+        return []
+    spans: list[tuple[float, float, tuple[int, int, int] | None]] = [(*tile, None)]
+    page = None if abs(y - APP_ICON_CUT_Y) <= 0.035 else _rounded_span(y, 0.15, 0.85, 0.27, 0.73, 0.05)
+    if page:
+        right = min(page[1], y + 0.41)
+        spans.append((page[0], right, APP_ICON_PAGE))
+        if y <= 0.32:
+            spans.append((0.56, right, APP_ICON_FOLD))
+        for line_y, line_right in APP_ICON_TEXT_LINES:
+            bar = _rounded_span(y, line_y - 0.018, line_y + 0.018, 0.35, line_right, 0.018)
+            if bar and not (y <= 0.32 and bar[1] > 0.56):
+                spans.append((*bar, APP_ICON_TEXT))
+    if abs(y - APP_ICON_CUT_Y) <= 0.016:
+        spans.extend((0.1125 + k * 0.09, 0.1675 + k * 0.09, APP_ICON_CUT) for k in range(9))
+    return spans
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+
+def render_app_icon_png(size: int) -> bytes:
+    grid = APP_ICON_SUPERSAMPLE
+    step = 1.0 / (size * grid)
+    (r0, g0, b0), (r1, g1, b1) = APP_ICON_GRADIENT
+    totals = [[0, 0, 0, 0] for _ in range(size * size)]
+    for sub_y in range(size * grid):
+        y = (sub_y + 0.5) * step
+        spans = _app_icon_row(y)
+        if not spans:
+            continue
+        row = sub_y // grid * size
+        for sub_x in range(size * grid):
+            x = (sub_x + 0.5) * step
+            color: tuple[int, int, int] | None = None
+            hit = False
+            for left, right, fill in spans:
+                if left <= x <= right:
+                    color, hit = fill, True
+            if not hit:
+                continue
+            if color is None:
+                t = (x + y) / 2
+                color = (round(r0 + (r1 - r0) * t), round(g0 + (g1 - g0) * t), round(b0 + (b1 - b0) * t))
+            total = totals[row + sub_x // grid]
+            total[0] += color[0]
+            total[1] += color[1]
+            total[2] += color[2]
+            total[3] += 1
+    pixels = bytearray()
+    for index, (r, g, b, hits) in enumerate(totals):
+        if index % size == 0:
+            pixels.append(0)
+        pixels += bytes((r // hits, g // hits, b // hits, hits * 255 // (grid * grid))) if hits else bytes(4)
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", header) + _png_chunk(b"IDAT", zlib.compress(bytes(pixels), 9)) + _png_chunk(b"IEND", b"")
 
 
 class JobCancelled(Exception):
@@ -359,6 +460,29 @@ user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
 user32.MonitorFromPoint.restype = wintypes.HANDLE
 user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
 user32.GetMonitorInfoW.restype = wintypes.BOOL
+user32.GetParent.argtypes = [wintypes.HWND]
+user32.GetParent.restype = wintypes.HWND
+
+dwmapi = ctypes.windll.dwmapi
+dwmapi.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+dwmapi.DwmSetWindowAttribute.restype = ctypes.c_long
+
+
+def use_dark_title_bar(window: tk.Tk) -> None:
+    window.update_idletasks()
+    hwnd = user32.GetParent(window.winfo_id())
+    if not hwnd:
+        return
+    for attribute, value in ((DWMWA_USE_IMMERSIVE_DARK_MODE, 1), (DWMWA_CAPTION_COLOR, TITLE_BAR_COLORREF)):
+        setting = ctypes.c_int(value)
+        dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(setting), ctypes.sizeof(setting))
+
+
+def fade_in(window: tk.Tk, step: int = 1) -> None:
+    with suppress(tk.TclError):
+        window.attributes("-alpha", min(step / FADE_IN_STEPS, 1.0))
+        if step < FADE_IN_STEPS:
+            window.after(FADE_IN_STEP_MS, fade_in, window, step + 1)
 
 
 def center_window_on_cursor_monitor(window: tk.Tk) -> None:
@@ -419,6 +543,7 @@ class PDFCutterApp(tb.Frame):
         self._last_progress = -1.0
         self._refresh_debounce_id: str | None = None
         self._active_job: JobDict | None = None
+        self._drag_over = False
 
         self._build_ui()
         self._wire_events()
@@ -428,6 +553,8 @@ class PDFCutterApp(tb.Frame):
         self._setup_close_handler()
 
         self._update_open_dir_button_state()
+        self._update_file_chip()
+        self.after_idle(self._show_path_ends)
 
     def _labeled_entry(
         self, frame, row: int, label: str, var, *, label_padx=(0, 8), label_pady=6, entry_pady=6, entry_sticky="ew", **entry_kwargs
@@ -450,79 +577,82 @@ class PDFCutterApp(tb.Frame):
         main_frame.grid(row=0, column=0, sticky="nsew")
         main_frame.columnconfigure(0, weight=1)
 
+        self._app_icons = [
+            tk.PhotoImage(master=self.master, data=base64.b64encode(render_app_icon_png(size)).decode("ascii"), format="png")
+            for size in APP_ICON_SIZES
+        ]
+        self.master.iconphoto(True, *self._app_icons)
+
         header = tb.Frame(main_frame)
         header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
         _title_wrap = tb.Frame(header)
         _title_wrap.pack(side="left")
-        tb.Label(_title_wrap, text="✂", font=("Segoe UI Symbol", 26)).pack(side="left", padx=(0, 10))
+        tb.Label(_title_wrap, image=self._app_icons[0]).pack(side="left", padx=(0, 12))
         _title_stack = tb.Frame(_title_wrap)
         _title_stack.pack(side="left")
         tb.Label(_title_stack, text="PDF Cutter", font=("Segoe UI", 20, "bold")).pack(anchor="w")
-        tb.Label(_title_stack, text="Extract  ·  Split  ·  Save", font=("Segoe UI", 9), bootstyle="secondary").pack(anchor="w")
+        tb.Label(_title_stack, text="Extract  ·  Split  ·  Save", font=("Segoe UI", 9), bootstyle="light").pack(anchor="w")
+        tb.Label(header, text=f"v{APP_VERSION}", font=("Segoe UI", 9), bootstyle="inverse-dark", padding=(10, 3)).pack(side="right")
 
         path_frame = tb.Labelframe(main_frame, text="Files", padding=10)
         path_frame.grid(row=1, column=0, sticky="ew")
         path_frame.columnconfigure(1, weight=1)
 
+        self._path_entries: list[tb.Entry] = []
         for row, label, var, browse_cmd, browse_style in (
             (0, "Input PDF:", self.input_path_var, self._browse_input, "primary-outline"),
             (1, "Output folder:", self.output_dir_var, self._browse_output_dir, "secondary-outline"),
         ):
-            self._labeled_entry(path_frame, row, label, var)
-            tb.Button(path_frame, text="Browse...", command=browse_cmd, bootstyle=browse_style).grid(
+            self._path_entries.append(self._labeled_entry(path_frame, row, label, var))
+            tb.Button(path_frame, text="Browse...", command=browse_cmd, bootstyle=browse_style, cursor="hand2").grid(
                 row=row, column=2, sticky="ew", padx=(8, 0), pady=6
             )
 
-        self.output_open_button = tb.Button(path_frame, text="Open", command=self._open_output_folder_now, bootstyle="secondary")
+        self.output_open_button = tb.Button(path_frame, text="Open", command=self._open_output_folder_now, bootstyle="secondary", cursor="hand2")
         self.output_open_button.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=6)
 
         self._labeled_entry(path_frame, 2, "Password (optional):", self.password_var, show="*")
 
-        if HAS_DND:
-            tb.Label(
-                path_frame,
-                text="Drop a PDF anywhere in this window to load it",
-                font=("Segoe UI", 8),
-                bootstyle="secondary",
-            ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(6, 0))
-
-        tb.Label(main_frame, textvariable=self.pdf_info_var, font=("Segoe UI", 9), bootstyle="secondary").grid(row=2, column=0, sticky="w", pady=(8, 0))
-
-        tb.Separator(main_frame, orient="horizontal").grid(row=3, column=0, sticky="ew", pady=15)
+        self.file_chip = tb.Frame(path_frame, padding=(10, 7), bootstyle="dark")
+        self.file_chip.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+        self.file_chip.columnconfigure(1, weight=1)
+        self.file_dot = tb.Label(self.file_chip, text="●", font=("Segoe UI", 10), bootstyle="inverse-dark")
+        self.file_dot.grid(row=0, column=0, padx=(0, 8))
+        self.file_label = tb.Label(self.file_chip, text=MSG_NO_FILE_LOADED, font=("Segoe UI", 10), bootstyle="inverse-dark")
+        self.file_label.grid(row=0, column=1, sticky="w")
+        self.file_hint = tb.Label(self.file_chip, text="", font=("Segoe UI", 8), bootstyle="inverse-dark")
+        self.file_hint.grid(row=0, column=2, sticky="e", padx=(12, 0))
 
         options_frame = tb.Labelframe(main_frame, text="Operation", padding=10)
-        options_frame.grid(row=4, column=0, sticky="ew")
+        options_frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         options_frame.columnconfigure(1, weight=1)
 
-        tb.Radiobutton(
-            options_frame, text="Extract pages/ranges into one PDF",
-            variable=self.operation_var, value=OP_EXTRACT
-        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(2, 2))
+        mode_switch = tb.Frame(options_frame)
+        mode_switch.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        mode_switch.columnconfigure((0, 1), weight=1, uniform="mode")
+        for column, text, value in (
+            (0, "Extract pages/ranges into one PDF", OP_EXTRACT),
+            (1, "Split into parts of N pages", OP_SPLIT),
+        ):
+            tb.Radiobutton(
+                mode_switch, text=text, variable=self.operation_var, value=value, bootstyle="primary-toolbutton", cursor="hand2"
+            ).grid(row=0, column=column, sticky="ew")
 
-        tb.Radiobutton(
-            options_frame, text="Split into parts of N pages (use 1 for single-page PDFs)",
-            variable=self.operation_var, value=OP_SPLIT
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 2))
+        range_label = tb.Label(options_frame, text="Ranges (e.g. 1-3,6,9):")
+        range_label.grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
 
-        self.range_entry = self._labeled_entry(
-            options_frame,
-            1,
-            "Ranges (e.g. 1-3,6,9):",
-            self.range_spec_var,
-            label_padx=(18, 8),
-            label_pady=4,
-            entry_pady=4,
-            font=("Consolas", 11),
-        )
+        self.range_entry = tb.Entry(options_frame, textvariable=self.range_spec_var, font=("Consolas", 11))
+        self.range_entry.grid(row=1, column=1, sticky="ew", pady=4)
 
         self.range_icon = tb.Label(options_frame, text="", font=("Segoe UI", 12), width=3)
         self.range_icon.grid(row=1, column=2, sticky="w", padx=(8, 0), pady=4)
 
-        tb.Label(options_frame, text="Pages per part (N):").grid(row=3, column=0, sticky="w", padx=(18, 8), pady=4)
+        chunk_label = tb.Label(options_frame, text="Pages per part (N):")
+        chunk_label.grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
 
         chunk_wrap = tb.Frame(options_frame)
-        chunk_wrap.grid(row=3, column=1, sticky="w", pady=4)
+        chunk_wrap.grid(row=1, column=1, columnspan=2, sticky="w", pady=4)
 
         self.chunk_entry = tb.Entry(chunk_wrap, textvariable=self.chunk_size_var, font=("Consolas", 11), width=10)
         self.chunk_entry.pack(side="left")
@@ -530,13 +660,21 @@ class PDFCutterApp(tb.Frame):
         self.chunk_icon = tb.Label(chunk_wrap, text="", font=("Segoe UI", 12), width=3)
         self.chunk_icon.pack(side="left", padx=(8, 0))
 
+        tb.Label(chunk_wrap, text="Use 1 for single-page PDFs", font=("Segoe UI", 9), bootstyle="light").pack(side="left", padx=(8, 0))
+
+        options_frame.columnconfigure(0, minsize=max(range_label.winfo_reqwidth(), chunk_label.winfo_reqwidth()) + 8)
+        self._mode_widgets = {OP_EXTRACT: (range_label, self.range_entry, self.range_icon), OP_SPLIT: (chunk_label, chunk_wrap)}
+
+        self.preview_label = tb.Label(options_frame, text="", font=("Segoe UI", 9), bootstyle="light")
+        self.preview_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
         name_frame = tb.Labelframe(main_frame, text="Output naming", padding=10)
         name_frame.grid(row=5, column=0, sticky="ew", pady=(10, 0))
         name_frame.columnconfigure(1, weight=1)
 
         self._labeled_entry(name_frame, 0, "Base name/prefix:", self.base_name_var)
 
-        tb.Checkbutton(name_frame, text="Open output folder when done", variable=self.open_folder_var).grid(
+        tb.Checkbutton(name_frame, text="Open output folder when done", variable=self.open_folder_var, cursor="hand2").grid(
             row=1, column=0, columnspan=2, sticky="w", pady=(0, 2)
         )
 
@@ -544,10 +682,12 @@ class PDFCutterApp(tb.Frame):
         action_frame.grid(row=6, column=0, sticky="ew", pady=(12, 0))
         action_frame.columnconfigure(0, weight=1)
 
-        self.start_button = tb.Button(action_frame, text="▶  Start", command=self._start_job, bootstyle="success", width=14)
+        self.start_button = tb.Button(action_frame, text="▶  Start", command=self._start_job, bootstyle="success", width=14, cursor="hand2")
         self.start_button.grid(row=0, column=0, padx=(0, 4), sticky="e")
 
-        self.cancel_button = tb.Button(action_frame, text="✕  Cancel", command=self._cancel_job, bootstyle="danger-outline", width=14, state="disabled")
+        self.cancel_button = tb.Button(
+            action_frame, text="✕  Cancel", command=self._cancel_job, bootstyle="danger-outline", width=14, state="disabled", cursor="hand2"
+        )
         self.cancel_button.grid(row=0, column=1)
 
         self.status_frame = tb.Frame(self, padding=(10, 6), bootstyle="primary")
@@ -557,8 +697,11 @@ class PDFCutterApp(tb.Frame):
         self.status_label = tb.Label(self.status_frame, textvariable=self.status_var, bootstyle="inverse-primary")
         self.status_label.grid(row=0, column=0, sticky="ew")
 
+        self.percent_label = tb.Label(self.status_frame, text="", width=5, anchor="e", bootstyle="inverse-primary")
+        self.percent_label.grid(row=0, column=1, padx=(8, 0))
+
         progress_container = tk.Frame(self.status_frame, bd=1, relief="solid", background="#666666")
-        progress_container.grid(row=0, column=1, padx=(8, 0))
+        progress_container.grid(row=0, column=2, padx=(8, 0))
 
         self.progress = tb.Progressbar(
             progress_container,
@@ -576,6 +719,7 @@ class PDFCutterApp(tb.Frame):
         theme_color = {"info": "primary", "success": "success", "error": "danger", "warning": "warning"}.get(level, "primary")
         self._safe_configure(self.status_frame, bootstyle=theme_color)
         self._safe_configure(self.status_label, bootstyle=f"inverse-{theme_color}")
+        self._safe_configure(self.percent_label, bootstyle=f"inverse-{theme_color}")
 
     def _set_progress_style(self, bootstyle: str) -> None:
         self._safe_configure(self.progress, bootstyle=bootstyle)
@@ -591,6 +735,10 @@ class PDFCutterApp(tb.Frame):
     @property
     def _output_dir(self) -> str:
         return self.output_dir_var.get().strip().strip('"')
+
+    @property
+    def _base_name(self) -> str:
+        return sanitize_filename_component(self.base_name_var.get().strip() or self._auto_base_name)
 
     def _parse_ranges(self) -> RangeParseResult:
         page_count = self._loaded_page_count
@@ -637,6 +785,7 @@ class PDFCutterApp(tb.Frame):
         for widget, state in ((self.range_icon, ranges.valid), (self.chunk_icon, chunk.valid)):
             icon, color = styles[state]
             self._safe_configure(widget, text=icon, foreground=color)
+        self._update_preview(ranges, chunk)
         if self._job_running:
             return
         result = chunk if self.operation_var.get() == OP_SPLIT else ranges
@@ -648,6 +797,41 @@ class PDFCutterApp(tb.Frame):
             self._set_status(STATUS_READY, "success")
         else:
             self._set_status(STATUS_READY, "info")
+
+    def _update_preview(self, ranges: RangeParseResult | None = None, chunk: RangeParseResult | None = None) -> None:
+        ranges = ranges or self._parse_ranges()
+        chunk = chunk or self._parse_chunk()
+        text = ""
+        if ranges.valid and ranges.indices:
+            name = extracted_file_name(self._base_name)
+            text = output_preview(len(ranges.indices), 1, name, name)
+        elif chunk.valid:
+            plan = split_plan(self._loaded_page_count, parse_chunk_size(self.chunk_size_var.get()), self._base_name)
+            text = output_preview(self._loaded_page_count, len(plan), plan[0][2], plan[-1][2])
+        self._safe_configure(self.preview_label, text=text)
+
+    def _update_file_chip(self) -> None:
+        info = self.pdf_info_var.get()
+        hint = MSG_DROP_HINT if HAS_DND else ""
+        if self._drag_over:
+            surface, text, dot_color, text_color, hint = "info", MSG_DROP_TO_LOAD, "white", "white", ""
+        elif self._loaded_page_count > 0:
+            surface, text, dot_color, text_color = "dark", info, COLOR_SUCCESS, "white"
+        elif info == MSG_NO_FILE_LOADED:
+            surface, text, dot_color, text_color = "dark", info, COLOR_DEFAULT_FG, COLOR_DEFAULT_FG
+        else:
+            surface, text, dot_color, text_color = "dark", info, COLOR_ERROR, COLOR_ERROR
+        self._safe_configure(self.file_chip, bootstyle=surface)
+        for widget, color in ((self.file_dot, dot_color), (self.file_label, text_color), (self.file_hint, COLOR_DEFAULT_FG)):
+            self._safe_configure(widget, bootstyle=f"inverse-{surface}")
+            self._safe_configure(widget, foreground=color)
+        self._safe_configure(self.file_label, text=text)
+        self._safe_configure(self.file_hint, text=hint)
+
+    def _show_path_ends(self) -> None:
+        for entry in self._path_entries:
+            with suppress(tk.TclError):
+                entry.xview_moveto(1.0)
 
     def _open_output_folder_now(self) -> None:
         output_dir = self._output_dir
@@ -662,12 +846,26 @@ class PDFCutterApp(tb.Frame):
         self.range_spec_var.trace_add("write", lambda *_: self._update_range_icon())
         self.chunk_size_var.trace_add("write", lambda *_: self._update_range_icon())
         self.password_var.trace_add("write", lambda *_: self._debounced_refresh_pdf_info())
+        self.base_name_var.trace_add("write", lambda *_: self._update_preview())
+        self.pdf_info_var.trace_add("write", lambda *_: self._update_file_chip())
 
     def _setup_dnd(self) -> None:
         if not HAS_DND:
             return
         self.master.drop_target_register(DND_FILES)
         self.master.dnd_bind("<<Drop>>", self._on_drop)
+        self.master.dnd_bind("<<DropEnter>>", self._on_drag_enter)
+        self.master.dnd_bind("<<DropLeave>>", self._on_drag_leave)
+
+    def _on_drag_enter(self, event) -> str:
+        self._drag_over = True
+        self._update_file_chip()
+        return event.action
+
+    def _on_drag_leave(self, event) -> str:
+        self._drag_over = False
+        self._update_file_chip()
+        return event.action
 
     def _setup_close_handler(self) -> None:
         self.master.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -679,6 +877,8 @@ class PDFCutterApp(tb.Frame):
         self.master.destroy()
 
     def _on_drop(self, event) -> None:
+        self._drag_over = False
+        self._update_file_chip()
         data = getattr(event, "data", "")
         try:
             raw_paths = self.master.tk.splitlist(data)
@@ -688,6 +888,7 @@ class PDFCutterApp(tb.Frame):
             p = Path(raw_path)
             if p.is_file() and p.suffix.lower() == ".pdf":
                 self.input_path_var.set(str(p))
+                self._show_path_ends()
                 return
         self._set_status("Dropped file is not a PDF", "error")
 
@@ -706,11 +907,18 @@ class PDFCutterApp(tb.Frame):
         op = self.operation_var.get()
         self.range_entry.state(["!disabled"] if op == OP_EXTRACT else ["disabled"])
         self.chunk_entry.state(["!disabled"] if op == OP_SPLIT else ["disabled"])
+        for mode, widgets in self._mode_widgets.items():
+            for widget in widgets:
+                if mode == op:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
         self._update_range_icon()
 
     def _set_var_from_dialog(self, var, dialog, **kwargs) -> None:
         if value := dialog(**kwargs):
             var.set(str(Path(value)))
+            self._show_path_ends()
 
     def _get_initial_dir(self) -> str:
         return self._output_dir or USER_PINNED_BROWSE_DIR_DO_NOT_CHANGE
@@ -783,7 +991,7 @@ class PDFCutterApp(tb.Frame):
         input_path = self._input_path
         output_dir = self._output_dir
         password = self.password_var.get()
-        base_name = sanitize_filename_component(self.base_name_var.get().strip() or self._auto_base_name)
+        base_name = self._base_name
         operation = self.operation_var.get()
 
         if not input_path:
@@ -856,6 +1064,7 @@ class PDFCutterApp(tb.Frame):
         self.start_button.state(["!disabled"])
         self.cancel_button.state(["disabled"])
         self.progress_var.set(0.0)
+        self._safe_configure(self.percent_label, text="")
         self._set_progress_style(style)
         self._set_status(status, level)
         self._debounced_refresh_pdf_info()
@@ -873,6 +1082,7 @@ class PDFCutterApp(tb.Frame):
                 self._set_status(str(payload))
             elif kind == "progress":
                 self.progress_var.set(float(payload))
+                self._safe_configure(self.percent_label, text=f"{float(payload):.0f}%")
             elif kind == "done":
                 self._finish_job("info", STATUS_READY, "info")
                 self._update_open_dir_button_state()
@@ -924,7 +1134,7 @@ class PDFCutterApp(tb.Frame):
 
                 if job["operation"] == OP_EXTRACT:
                     page_indices: list[int] = job["page_indices"]
-                    out_path = make_unique_path(str(Path(job["output_dir"]) / f"{job['base_name']}_extracted.pdf"))
+                    out_path = make_unique_path(str(Path(job["output_dir"]) / extracted_file_name(job["base_name"])))
                     self._job_queue.put(("status", STATUS_COLLECTING_PAGES.format(count=len(page_indices))))
 
                     if not write_pdf_pages(
@@ -977,7 +1187,11 @@ def main() -> None:
     root.withdraw()
     PDFCutterApp(root)
     center_window_on_cursor_monitor(root)
+    with suppress(tk.TclError):
+        root.attributes("-alpha", 0.0)
     root.deiconify()
+    use_dark_title_bar(root)
+    fade_in(root)
 
     root.mainloop()
 

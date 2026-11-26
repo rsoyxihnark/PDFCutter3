@@ -179,11 +179,36 @@ jobs:
           written.write_text(resource, encoding="utf-8")
           print(f"PDF_Cutter.exe will report version {version}.")
 
+      - name: Draw the icon PDF_Cutter.exe shows
+        shell: python
+        run: |
+          import os
+          import struct
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, os.getcwd())
+          from PDF_Cutter import render_app_icon_png
+
+          sizes = (16, 24, 32, 48, 64, 128, 256)
+          images = [render_app_icon_png(size) for size in sizes]
+          header = struct.pack("<HHH", 0, 1, len(images))
+          offset = len(header) + 16 * len(images)
+          entries = b""
+          for size, image in zip(sizes, images):
+              entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(image), offset)
+              offset += len(image)
+
+          written = Path(os.environ["RUNNER_TEMP"], "PDF_Cutter.ico")
+          written.write_bytes(header + entries + b"".join(images))
+          print(f"PDF_Cutter.exe will carry a {len(sizes)} size icon of {written.stat().st_size} bytes.")
+
       - name: Build PDF Cutter
         run: >
           pyinstaller --noconfirm --onefile --windowed
           --name PDF_Cutter
           --version-file "${{ runner.temp }}/version_info.txt"
+          --icon "${{ runner.temp }}/PDF_Cutter.ico"
           --collect-all ttkbootstrap
           --collect-all tkinterdnd2
           PDF_Cutter.py
